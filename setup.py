@@ -17,7 +17,7 @@ def get_long_description():
 
 setup(
     name='uhm',
-    version='0.0.4',
+    version='0.0.5',
     description='Code to remove filler words from videos',
     long_description=get_long_description(),
     project_urls={
