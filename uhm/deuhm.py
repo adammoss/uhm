@@ -7,12 +7,15 @@ import argparse
 import tempfile
 import collections
 import json
+import datetime
+import glob
 
 import librosa
 import librosa.display
 import numpy as np
 from ibm_watson import SpeechToTextV1
 from ibm_cloud_sdk_core.authenticators import IAMAuthenticator
+import ibm_cloud_sdk_core
 import soundfile as sf
 import warnings
 warnings.filterwarnings('ignore')
@@ -51,12 +54,15 @@ class DeUhm:
             y, sr = librosa.load(self.input_file, duration=chunk_duration, offset=chunk_duration * chunk)
             temp = tempfile.NamedTemporaryFile(suffix=".flac")
             sf.write(temp, y, sr)
-            result = self.service.recognize(
-                audio=temp.read(),
-                content_type='audio/flac',
-                model=model,
-                timestamps=True,
-                word_confidence=True).get_result()
+            try:
+                result = self.service.recognize(
+                    audio=temp.read(),
+                    content_type='audio/flac',
+                    model=model,
+                    timestamps=True,
+                    word_confidence=True).get_result()
+            except ibm_cloud_sdk_core.api_exception.ApiException:
+                continue
             temp.close()
             for res in result.get('results'):
                 for alt in res.get('alternatives'):
@@ -68,7 +74,9 @@ class DeUhm:
                                 filler = collections.OrderedDict([
                                     ('id', filler_id),
                                     ('start', offset + timestamps[i][1]),
+                                    ('start_time', str(datetime.timedelta(seconds=offset + timestamps[i][1]))),
                                     ('end', offset + timestamps[i][2]),
+                                    ('end_time', str(datetime.timedelta(seconds=offset + timestamps[i][2]))),
                                     ('confidence', word_confidence[i][1])
                                 ])
                                 if self.feedback > 0:
@@ -161,9 +169,10 @@ def run():
     parser.add_argument('--max_transcribe_duration', type=int, default=None)
     parser.add_argument('--exclude_times', nargs='+', default=[])
     parser.add_argument('--exclude_ids', nargs='+', default=[])
-    parser.add_argument('-m', '--mode', type=str, default='cut')
+    parser.add_argument('--mode', type=str, default='cut')
     parser.add_argument('--api_key', type=str, default=None)
     parser.add_argument('--api_url', type=str, default=None)
+    parser.add_argument('-log', action='store_true')
 
     args = parser.parse_args()
 
@@ -175,6 +184,21 @@ def run():
                            max_duration=args.max_transcribe_duration)
     valid_fillers = u.valid_fillers(fillers, hesitation_threshold=args.hesitation_threshold,
                                     exclude_times=exclude_times, exclude_filler_ids=exclude_ids)
+    if args.log:
+        if '.' in args.input:
+            logdir = args.input.split('.')[0] + '.log'
+        else:
+            logdir = args.input + '.log'
+        if not os.path.exists(logdir):
+            os.makedirs(logdir)
+        with open(os.path.join(logdir, 'valid_fillers.json'), 'w') as f:
+            f.write(json.dumps(valid_fillers))
+        for f in glob.glob(os.path.join(logdir, '*.flac')):
+            os.remove(f)
+        data = u.filler_audio(valid_fillers, padding=0.5)
+        for i in range(len(data)):
+            y, sr = data[i]
+            sf.write(os.path.join(logdir, '%s.flac' % valid_fillers[i]['id']), y, sr)
     u.new_video(args.output, valid_fillers, mode=args.mode)
 
 
